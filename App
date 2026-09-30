@@ -1,0 +1,351 @@
+"""
+Flask API for AI Smart Energy Consumption Predictor
+Provides REST endpoints for predictions and model management
+"""
+
+from flask import Flask, request, jsonify
+from flask_cors import CORS
+import pandas as pd
+import numpy as np
+import os
+from datetime import datetime, timedelta
+import logging
+
+from predictor import EnergyPredictor
+from data_processor import DataProcessor
+from config import API_CONFIG, LOGGING_CONFIG
+
+# Configure logging
+logging.basicConfig(
+    level=LOGGING_CONFIG['log_level'],
+    format=LOGGING_CONFIG['format']
+)
+logger = logging.getLogger(__name__)
+
+# Initialize Flask app
+app = Flask(__name__)
+CORS(app)
+
+# Global predictor instance
+predictor = None
+data_processor = None
+
+
+def load_model():
+    """Load pre-trained model"""
+    global predictor
+    try:
+        predictor = EnergyPredictor()
+        # Load trained model if exists
+        model_path = 'models/trained_models/energy_predictor.joblib'
+        if os.path.exists(model_path):
+            predictor.load_model(model_path)
+            logger.info("Model loaded successfully")
+        else:
+            logger.warning("No pre-trained model found")
+    except Exception as e:
+        logger.error(f"Error loading model: {e}")
+        return False
+    return True
+
+
+@app.before_request
+def initialize():
+    """Initialize on first request"""
+    global predictor, data_processor
+    if predictor is None:
+        load_model()
+    if data_processor is None:
+        data_processor = DataProcessor()
+
+
+@app.route('/health', methods=['GET'])
+def health():
+    """Health check endpoint"""
+    return jsonify({
+        'status': 'healthy',
+        'timestamp': datetime.now().isoformat(),
+        'model_loaded': predictor is not None and predictor.is_trained
+    }), 200
+
+
+@app.route('/predict', methods=['POST'])
+def predict():
+    """
+    Make energy consumption prediction
+    
+    Expected JSON:
+    {
+        "features": [[f1, f2, ...], [f1, f2, ...]],  # 2D array
+        "hours_ahead": 24,
+        "return_confidence": true
+    }
+    """
+    try:
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({'error': 'No data provided'}), 400
+        
+        # Extract parameters
+        features = np.array(data.get('features'))
+        hours_ahead = data.get('hours_ahead', 24)
+        return_confidence = data.get('return_confidence', True)
+        
+        if features.size == 0:
+            return jsonify({'error': 'Features array is empty'}), 400
+        
+        if not predictor or not predictor.is_trained:
+            return jsonify({'error': 'Model not trained'}), 503
+        
+        # Make prediction
+        result = predictor.predict(
+            X=features,
+            hours_ahead=hours_ahead,
+            return_confidence=return_confidence
+        )
+        
+        # Format response
+        response_data = {
+            'predictions': {},
+            'hours_ahead': hours_ahead,
+            'timestamp': datetime.now().isoformat(),
+        }
+        
+        # Convert numpy arrays to lists
+        for model_name, preds in result['predictions'].items():
+            if isinstance(preds, np.ndarray):
+                response_data['predictions'][model_name] = preds.tolist()
+            else:
+                response_data['predictions'][model_name] = preds
+        
+        if 'lower_bound' in result and result['lower_bound'] is not None:
+            response_data['lower_bound'] = result['lower_bound'].tolist()
+        
+        if 'upper_bound' in result and result['upper_bound'] is not None:
+            response_data['upper_bound'] = result['upper_bound'].tolist()
+        
+        return jsonify(response_data), 200
+    
+    except Exception as e:
+        logger.error(f"Prediction error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/train', methods=['POST'])
+def train():
+    """
+    Train model with provided data
+    
+    Expected: Multipart form with CSV file or JSON with data
+    """
+    try:
+        global predictor
+        
+        if 'file' not in request.files:
+            return jsonify({'error': 'No file provided'}), 400
+        
+        file = request.files['file']
+        
+        if file.filename == '':
+            return jsonify({'error': 'No file selected'}), 400
+        
+        # Load data
+        data = pd.read_csv(file)
+        
+        # Get training parameters
+        test_size = float(request.form.get('test_size', 0.2))
+        epochs = int(request.form.get('epochs', 50))
+        model_type = request.form.get('model_type', 'ensemble')
+        
+        # Initialize predictor
+        predictor = EnergyPredictor(model_type=model_type)
+        
+        # Train
+        predictor.train(
+            data=data,
+            test_size=test_size,
+            epochs=epochs,
+            verbose=1
+        )
+        
+        # Save model
+        os.makedirs('models/trained_models', exist_ok=True)
+        model_path = 'models/trained_models/energy_predictor.joblib'
+        predictor.save_model(model_path)
+        
+        return jsonify({
+            'status': 'Training completed',
+            'model_type': model_type,
+            'samples_used': len(data),
+            'model_saved': True,
+            'timestamp': datetime.now().isoformat()
+        }), 200
+    
+    except Exception as e:
+        logger.error(f"Training error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/evaluate', methods=['GET'])
+def evaluate():
+    """Get model evaluation metrics"""
+    try:
+        if not predictor or not predictor.is_trained:
+            return jsonify({'error': 'Model not trained'}), 503
+        
+        # Note: This requires test data to be available
+        # In production, you might store this separately
+        return jsonify({
+            'status': 'Model evaluation',
+            'model_type': predictor.model_type,
+            'is_trained': predictor.is_trained,
+            'timestamp': datetime.now().isoformat(),
+            'note': 'Run evaluate() with test data for detailed metrics'
+        }), 200
+    
+    except Exception as e:
+        logger.error(f"Evaluation error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/anomalies', methods=['POST'])
+def detect_anomalies():
+    """
+    Detect anomalies in energy consumption data
+    
+    Expected JSON:
+    {
+        "values": [v1, v2, v3, ...],
+        "threshold": 0.95
+    }
+    """
+    try:
+        if not predictor:
+            return jsonify({'error': 'Model not initialized'}), 503
+        
+        data = request.get_json()
+        values = np.array(data.get('values')).reshape(-1, 1)
+        
+        if values.size == 0:
+            return jsonify({'error': 'Values array is empty'}), 400
+        
+        # Detect anomalies
+        anomalies = predictor.detect_anomalies(values)
+        
+        if anomalies is None:
+            return jsonify({'error': 'Anomaly detector not available'}), 503
+        
+        anomaly_indices = np.where(anomalies)[0].tolist()
+        
+        return jsonify({
+            'anomalies_detected': len(anomaly_indices),
+            'anomaly_indices': anomaly_indices,
+            'anomaly_percentage': (len(anomaly_indices) / len(values) * 100),
+            'timestamp': datetime.now().isoformat()
+        }), 200
+    
+    except Exception as e:
+        logger.error(f"Anomaly detection error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/config', methods=['GET'])
+def get_config():
+    """Get current configuration (sanitized)"""
+    return jsonify({
+        'api_host': API_CONFIG['host'],
+        'api_port': API_CONFIG['api_port'],
+        'forecast_horizon': 24,
+        'supported_models': ['lstm', 'xgboost', 'statistical', 'ensemble'],
+        'timestamp': datetime.now().isoformat()
+    }), 200
+
+
+@app.route('/status', methods=['GET'])
+def status():
+    """Get system status"""
+    return jsonify({
+        'service': 'AI Smart Energy Consumption Predictor',
+        'version': '1.0.0',
+        'status': 'running',
+        'model_trained': predictor is not None and predictor.is_trained,
+        'model_type': predictor.model_type if predictor else None,
+        'uptime': datetime.now().isoformat(),
+        'endpoints': {
+            'health': 'GET /health',
+            'predict': 'POST /predict',
+            'train': 'POST /train',
+            'anomalies': 'POST /anomalies',
+            'config': 'GET /config',
+            'status': 'GET /status',
+            'docs': 'GET /docs'
+        }
+    }), 200
+
+
+@app.route('/docs', methods=['GET'])
+def docs():
+    """API documentation"""
+    return jsonify({
+        'title': 'AI Smart Energy Consumption Predictor API',
+        'description': 'REST API for energy consumption forecasting',
+        'version': '1.0.0',
+        'endpoints': {
+            'POST /predict': {
+                'description': 'Make energy consumption predictions',
+                'parameters': {
+                    'features': 'Array of feature values',
+                    'hours_ahead': 'Number of hours to forecast',
+                    'return_confidence': 'Include confidence intervals'
+                }
+            },
+            'POST /train': {
+                'description': 'Train model with provided data',
+                'parameters': {
+                    'file': 'CSV file with training data',
+                    'test_size': 'Test set proportion',
+                    'epochs': 'Number of training epochs',
+                    'model_type': 'Model type to train'
+                }
+            },
+            'POST /anomalies': {
+                'description': 'Detect anomalies in consumption data',
+                'parameters': {
+                    'values': 'Array of consumption values'
+                }
+            },
+            'GET /health': 'Health check',
+            'GET /status': 'System status',
+            'GET /config': 'Configuration info'
+        }
+    }), 200
+
+
+@app.errorhandler(404)
+def not_found(error):
+    """Handle 404 errors"""
+    return jsonify({'error': 'Endpoint not found'}), 404
+
+
+@app.errorhandler(500)
+def server_error(error):
+    """Handle 500 errors"""
+    logger.error(f"Server error: {error}")
+    return jsonify({'error': 'Internal server error'}), 500
+
+
+if __name__ == '__main__':
+    # Initialize
+    load_model()
+    
+    # Run Flask app
+    print(f"Starting API server on {API_CONFIG['host']}:{API_CONFIG['api_port']}")
+    print("Documentation available at /docs")
+    
+    app.run(
+        host=API_CONFIG['host'],
+        port=API_CONFIG['api_port'],
+        debug=API_CONFIG['flask_debug'],
+        threaded=True
+    )
