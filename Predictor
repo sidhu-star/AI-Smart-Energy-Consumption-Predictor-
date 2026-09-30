@@ -1,0 +1,375 @@
+"""
+AI Smart Energy Consumption Predictor
+Main prediction engine combining multiple models for accurate forecasting
+"""
+
+import numpy as np
+import pandas as pd
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.ensemble import IsolationForest
+import warnings
+warnings.filterwarnings('ignore')
+
+try:
+    from tensorflow.keras.models import Sequential
+    from tensorflow.keras.layers import LSTM, Dense, Dropout
+    from tensorflow.keras.callbacks import EarlyStopping
+except ImportError:
+    print("TensorFlow not installed. LSTM models will not be available.")
+
+try:
+    import xgboost as xgb
+except ImportError:
+    print("XGBoost not installed. XGBoost models will not be available.")
+
+from config import MODEL_CONFIG, TRAINING_CONFIG, FORECAST_CONFIG, ANOMALY_CONFIG
+
+
+class EnergyPredictor:
+    """
+    Main predictor class for energy consumption forecasting
+    Supports LSTM, XGBoost, Statistical models, and ensemble methods
+    """
+    
+    def __init__(self, model_type='ensemble', config=None):
+        """
+        Initialize the energy predictor
+        
+        Args:
+            model_type (str): Type of model ('lstm', 'xgboost', 'statistical', 'ensemble')
+            config (dict): Custom configuration dictionary
+        """
+        self.model_type = model_type
+        self.config = config or MODEL_CONFIG
+        self.models = {}
+        self.scaler = MinMaxScaler()
+        self.feature_scaler = MinMaxScaler()
+        self.is_trained = False
+        self.anomaly_detector = None
+        self.training_history = {}
+        
+    def prepare_data(self, data, target_column='consumption_kwh', 
+                    test_size=0.2, lookback=24):
+        """
+        Prepare data for model training
+        
+        Args:
+            data (pd.DataFrame): Input dataframe
+            target_column (str): Column name for target variable
+            test_size (float): Proportion of data for testing
+            lookback (int): Number of historical periods for LSTM
+            
+        Returns:
+            tuple: (X_train, X_test, y_train, y_test, scaler)
+        """
+        print(f"Preparing data... (shape: {data.shape})")
+        
+        # Sort by timestamp
+        if 'timestamp' in data.columns:
+            data = data.sort_values('timestamp').reset_index(drop=True)
+        
+        # Extract target
+        y = data[target_column].values.reshape(-1, 1)
+        X = data.drop(columns=[target_column, 'timestamp'], errors='ignore').values
+        
+        # Scale data
+        y_scaled = self.scaler.fit_transform(y)
+        X_scaled = self.feature_scaler.fit_transform(X)
+        
+        # Split into train/test
+        split_idx = int(len(data) * (1 - test_size))
+        
+        X_train = X_scaled[:split_idx]
+        X_test = X_scaled[split_idx:]
+        y_train = y_scaled[:split_idx]
+        y_test = y_scaled[split_idx:]
+        
+        print(f"Training set: {X_train.shape[0]} samples")
+        print(f"Test set: {X_test.shape[0]} samples")
+        
+        return X_train, X_test, y_train, y_test, data[target_column].values
+    
+    def create_lstm_model(self, input_shape):
+        """Create and return LSTM model"""
+        lstm_config = self.config['lstm']
+        
+        model = Sequential()
+        model.add(LSTM(lstm_config['units'][0], 
+                      activation=lstm_config['activation'],
+                      input_shape=input_shape))
+        model.add(Dropout(lstm_config['dropout']))
+        
+        if len(lstm_config['units']) > 1:
+            for units in lstm_config['units'][1:]:
+                model.add(Dense(units, activation=lstm_config['activation']))
+                model.add(Dropout(lstm_config['dropout']))
+        
+        model.add(Dense(1))
+        model.compile(optimizer='adam', loss='mse', metrics=['mae'])
+        
+        return model
+    
+    def create_xgboost_model(self):
+        """Create and return XGBoost model"""
+        xgb_config = self.config['xgboost']
+        return xgb.XGBRegressor(**xgb_config)
+    
+    def train(self, data, target_column='consumption_kwh', test_size=0.2, 
+             epochs=None, verbose=1):
+        """
+        Train the selected model(s)
+        
+        Args:
+            data (pd.DataFrame): Training data
+            target_column (str): Target column name
+            test_size (float): Test set proportion
+            epochs (int): Number of training epochs (for LSTM)
+            verbose (int): Verbosity level
+        """
+        print(f"Training {self.model_type} model...")
+        
+        # Prepare data
+        X_train, X_test, y_train, y_test, y_original = self.prepare_data(
+            data, target_column, test_size
+        )
+        
+        epochs = epochs or TRAINING_CONFIG['epochs']
+        
+        if self.model_type == 'lstm':
+            self._train_lstm(X_train, X_test, y_train, y_test, epochs, verbose)
+        
+        elif self.model_type == 'xgboost':
+            self._train_xgboost(X_train, X_test, y_train, y_test)
+        
+        elif self.model_type == 'ensemble':
+            self._train_ensemble(X_train, X_test, y_train, y_test, epochs, verbose)
+        
+        # Train anomaly detector
+        self._train_anomaly_detector(y_original)
+        
+        self.is_trained = True
+        print("Training complete!")
+    
+    def _train_lstm(self, X_train, X_test, y_train, y_test, epochs, verbose):
+        """Train LSTM model"""
+        # Reshape for LSTM [samples, timesteps, features]
+        X_train_lstm = X_train.reshape((X_train.shape[0], 1, X_train.shape[1]))
+        X_test_lstm = X_test.reshape((X_test.shape[0], 1, X_test.shape[1]))
+        
+        model = self.create_lstm_model(X_train_lstm.shape[1:])
+        
+        early_stop = EarlyStopping(
+            monitor='val_loss',
+            patience=TRAINING_CONFIG['early_stopping_patience'],
+            restore_best_weights=True
+        )
+        
+        history = model.fit(
+            X_train_lstm, y_train,
+            epochs=epochs,
+            batch_size=TRAINING_CONFIG['batch_size'],
+            validation_data=(X_test_lstm, y_test),
+            callbacks=[early_stop],
+            verbose=verbose
+        )
+        
+        self.models['lstm'] = model
+        self.training_history['lstm'] = history
+    
+    def _train_xgboost(self, X_train, X_test, y_train, y_test):
+        """Train XGBoost model"""
+        model = self.create_xgboost_model()
+        
+        model.fit(
+            X_train, y_train.ravel(),
+            eval_set=[(X_test, y_test)],
+            verbose=False
+        )
+        
+        self.models['xgboost'] = model
+    
+    def _train_ensemble(self, X_train, X_test, y_train, y_test, epochs, verbose):
+        """Train ensemble of models"""
+        print("Training ensemble models...")
+        
+        # LSTM
+        self._train_lstm(X_train, X_test, y_train, y_test, epochs, verbose)
+        
+        # XGBoost
+        self._train_xgboost(X_train, X_test, y_train, y_test)
+        
+        # Statistical model (using simple exponential smoothing)
+        from statsmodels.tsa.holtwinters import ExponentialSmoothing
+        try:
+            stat_model = ExponentialSmoothing(
+                y_train.ravel(),
+                trend='add',
+                seasonal=None
+            ).fit()
+            self.models['statistical'] = stat_model
+        except:
+            print("Warning: Statistical model training failed")
+    
+    def _train_anomaly_detector(self, y_data):
+        """Train anomaly detection model"""
+        if ANOMALY_CONFIG['enabled']:
+            self.anomaly_detector = IsolationForest(
+                contamination=ANOMALY_CONFIG['contamination'],
+                random_state=42
+            )
+            self.anomaly_detector.fit(y_data.reshape(-1, 1))
+    
+    def predict(self, X=None, hours_ahead=None, return_confidence=True):
+        """
+        Make predictions
+        
+        Args:
+            X (array): Feature data for prediction
+            hours_ahead (int): Hours ahead to predict
+            return_confidence (bool): Include confidence intervals
+            
+        Returns:
+            dict: Predictions and confidence intervals
+        """
+        if not self.is_trained:
+            raise ValueError("Model must be trained before prediction")
+        
+        hours_ahead = hours_ahead or FORECAST_CONFIG['forecast_horizon']
+        
+        predictions = {}
+        
+        if self.model_type == 'lstm' and X is not None:
+            X_lstm = X.reshape((X.shape[0], 1, X.shape[1]))
+            pred = self.models['lstm'].predict(X_lstm, verbose=0)
+            predictions['lstm'] = self.scaler.inverse_transform(pred).flatten()
+        
+        elif self.model_type == 'xgboost' and X is not None:
+            pred = self.models['xgboost'].predict(X)
+            predictions['xgboost'] = self.scaler.inverse_transform(
+                pred.reshape(-1, 1)
+            ).flatten()
+        
+        elif self.model_type == 'ensemble':
+            predictions = self._ensemble_predict(X)
+        
+        # Calculate confidence intervals if requested
+        result = {
+            'predictions': predictions,
+            'hours_ahead': hours_ahead,
+        }
+        
+        if return_confidence and self.model_type == 'ensemble':
+            result['lower_bound'] = predictions.get('lower_bound')
+            result['upper_bound'] = predictions.get('upper_bound')
+        
+        return result
+    
+    def _ensemble_predict(self, X):
+        """Generate ensemble predictions"""
+        predictions = {}
+        
+        if 'lstm' in self.models and X is not None:
+            X_lstm = X.reshape((X.shape[0], 1, X.shape[1]))
+            lstm_pred = self.models['lstm'].predict(X_lstm, verbose=0)
+            predictions['lstm'] = self.scaler.inverse_transform(lstm_pred).flatten()
+        
+        if 'xgboost' in self.models and X is not None:
+            xgb_pred = self.models['xgboost'].predict(X)
+            predictions['xgboost'] = self.scaler.inverse_transform(
+                xgb_pred.reshape(-1, 1)
+            ).flatten()
+        
+        if 'statistical' in self.models:
+            try:
+                stat_pred = self.models['statistical'].predict(
+                    start=0, end=len(X)-1 if X is not None else 0
+                )
+                predictions['statistical'] = stat_pred.values
+            except:
+                pass
+        
+        # Weighted average
+        weights = MODEL_CONFIG['ensemble']['weights'][:len(predictions)]
+        weights = np.array(weights) / np.sum(weights)
+        
+        ensemble_pred = np.zeros_like(list(predictions.values())[0])
+        for pred, weight in zip(predictions.values(), weights):
+            ensemble_pred += pred * weight
+        
+        predictions['ensemble'] = ensemble_pred
+        
+        # Calculate confidence intervals
+        std_pred = np.std(list(predictions.values())[:-1], axis=0)
+        predictions['lower_bound'] = ensemble_pred - 1.96 * std_pred
+        predictions['upper_bound'] = ensemble_pred + 1.96 * std_pred
+        
+        return predictions
+    
+    def detect_anomalies(self, y_data):
+        """Detect anomalies in data"""
+        if self.anomaly_detector is None:
+            return None
+        
+        predictions = self.anomaly_detector.predict(y_data.reshape(-1, 1))
+        return predictions == -1  # -1 indicates anomaly
+    
+    def evaluate(self, X_test, y_test):
+        """
+        Evaluate model performance
+        
+        Args:
+            X_test (array): Test features
+            y_test (array): Test targets
+            
+        Returns:
+            dict: Performance metrics
+        """
+        y_pred = self.predict(X_test)['predictions']
+        
+        if isinstance(y_pred, dict):
+            y_pred = y_pred.get('ensemble', list(y_pred.values())[0])
+        
+        # Inverse transform for evaluation
+        y_test_original = self.scaler.inverse_transform(y_test)
+        
+        # Calculate metrics
+        from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+        
+        mae = mean_absolute_error(y_test_original, y_pred)
+        rmse = np.sqrt(mean_squared_error(y_test_original, y_pred))
+        mape = np.mean(np.abs((y_test_original - y_pred) / y_test_original)) * 100
+        r2 = r2_score(y_test_original, y_pred)
+        
+        return {
+            'mae': mae,
+            'rmse': rmse,
+            'mape': mape,
+            'r2': r2,
+        }
+    
+    def save_model(self, filepath):
+        """Save trained model"""
+        import joblib
+        joblib.dump({
+            'models': self.models,
+            'scaler': self.scaler,
+            'feature_scaler': self.feature_scaler,
+            'model_type': self.model_type
+        }, filepath)
+        print(f"Model saved to {filepath}")
+    
+    def load_model(self, filepath):
+        """Load trained model"""
+        import joblib
+        data = joblib.load(filepath)
+        self.models = data['models']
+        self.scaler = data['scaler']
+        self.feature_scaler = data['feature_scaler']
+        self.model_type = data['model_type']
+        self.is_trained = True
+        print(f"Model loaded from {filepath}")
+
+
+if __name__ == '__main__':
+    print("Energy Consumption Predictor Module")
+    print("Import this module to use the EnergyPredictor class")
