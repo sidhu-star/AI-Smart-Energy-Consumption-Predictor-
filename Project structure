@@ -1,1 +1,267 @@
+# Project Structure Guide
+
+## Directory Layout
+
+```
+ai-energy-predictor/
+│
+├── README.md                    # Main project documentation
+├── PROJECT_STRUCTURE.md         # This file - directory guide
+├── CONTRIBUTING.md              # Contribution guidelines
+├── LICENSE                      # MIT License
+├── .gitignore                   # Git ignore patterns
+├── .env.example                 # Environment variables example
+├── requirements.txt             # Python dependencies
+│
+├── data/                        # Data directory
+│   ├── raw/                     # Raw, unprocessed energy data
+│   │   └── .gitkeep
+│   ├── processed/               # Preprocessed, feature-engineered data
+│   │   └── .gitkeep
+│   └── sample_data.csv          # Sample dataset for testing
+│
+├── models/                      # Model storage
+│   ├── trained_models/          # Saved trained model files
+│   │   ├── .gitkeep
+│   │   ├── lstm_model.h5        # Trained LSTM model
+│   │   ├── xgboost_model.pkl    # Trained XGBoost model
+│   │   └── energy_predictor.joblib  # Full ensemble model
+│   │
+│   └── configs/                 # Model configurations
+│       ├── .gitkeep
+│       └── model_config.yaml
+│
+├── src/                         # Source code (main Python modules)
+│   ├── __init__.py
+│   ├── predictor.py             # Core prediction engine
+│   ├── data_processor.py        # Data processing utilities
+│   ├── config.py                # Configuration settings
+│   ├── utils.py                 # Utility functions
+│   └── evaluate.py              # Model evaluation (optional)
+│
+├── notebooks/                   # Jupyter notebooks for exploration
+│   ├── .gitkeep
+│   ├── 01_exploratory_analysis.ipynb
+│   ├── 02_model_training.ipynb
+│   ├── 03_model_evaluation.ipynb
+│   └── 04_predictions.ipynb
+│
+├── results/                     # Results and outputs
+│   ├── plots/                   # Generated visualizations
+│   │   ├── .gitkeep
+│   │   ├── training_loss.png
+│   │   └── predictions.png
+│   │
+│   ├── reports/                 # Analysis reports
+│   │   ├── .gitkeep
+│   │   └── model_report.md
+│   │
+│   └── predictions/             # Generated predictions
+│       ├── .gitkeep
+│       └── 2024_predictions.csv
+│
+├── tests/                       # Unit tests
+│   ├── .gitkeep
+│   ├── test_predictor.py
+│   ├── test_data_processor.py
+│   └── test_utils.py
+│
+├── logs/                        # Log files
+│   ├── .gitkeep
+│   └── energy_predictor.log
+│
+├── examples/                    # Example scripts and datasets
+│   ├── .gitkeep
+│   ├── example_usage.py         # Basic usage examples
+│   ├── example_advanced.py      # Advanced examples
+│   └── sample_data.csv
+│
+├── deployment/                  # Deployment configurations
+│   ├── Dockerfile               # Docker containerization
+│   ├── docker-compose.yml       # Docker compose setup
+│   ├── requirements_prod.txt    # Production dependencies
+│   └── .env.production          # Production environment config
+│
+├── app.py                       # Flask API application
+├── example_usage.py             # Quick start examples
+│
+└── docs/                        # Additional documentation
+    ├── .gitkeep
+    ├── API.md                   # API documentation
+    ├── INSTALLATION.md          # Installation guide
+    ├── TUTORIAL.md              # Tutorial for beginners
+    └── TROUBLESHOOTING.md       # Common issues
+```
+
+## File Descriptions
+
+### Core Source Files (src/)
+
+| File | Purpose |
+|------|---------|
+| `predictor.py` | Main prediction engine with model training and inference |
+| `data_processor.py` | Data loading, validation, and feature engineering |
+| `config.py` | Centralized configuration for all settings |
+| `utils.py` | Utility functions for metrics, validation, formatting |
+
+### Configuration Files
+
+| File | Purpose |
+|------|---------|
+| `config.py` | Model and training parameters |
+| `.env.example` | Environment variable template |
+| `.gitignore` | Files to exclude from version control |
+| `requirements.txt` | Python package dependencies |
+
+### Data Directories
+
+| Directory | Purpose |
+|-----------|---------|
+| `data/raw/` | Store original, unmodified energy consumption data |
+| `data/processed/` | Store cleaned, feature-engineered data |
+
+### Model Directories
+
+| Directory | Purpose |
+|-----------|---------|
+| `models/trained_models/` | Save and load trained model files |
+| `models/configs/` | Store model configuration files |
+
+### Output Directories
+
+| Directory | Purpose |
+|-----------|---------|
+| `results/plots/` | Generated charts and visualizations |
+| `results/reports/` | Analysis and performance reports |
+| `results/predictions/` | Model predictions and forecasts |
+
+### Application Files
+
+| File | Purpose |
+|------|---------|
+| `app.py` | Flask REST API for model serving |
+| `example_usage.py` | Examples of library usage |
+
+## Key Workflows
+
+### Data Processing Workflow
+```
+raw data (CSV) → data_processor.py → feature engineering → processed data
+                 ↓ validation & cleaning
+```
+
+### Model Training Workflow
+```
+processed data → predictor.py → model training → trained_models/
+                 ↓ hyperparameter tuning
+```
+
+### Prediction Workflow
+```
+trained model + features → predictor.py → predictions
+                          ↓ confidence intervals
+```
+
+### API Deployment Workflow
+```
+trained model → app.py (Flask) → REST API → predictions/anomalies
+```
+
+## Naming Conventions
+
+### Python Files
+- Use lowercase with underscores: `data_processor.py`, `utils.py`
+- Model names: `predictor.py`, `evaluator.py`
+
+### Data Files
+- Format: `{data_type}_{region}_{date}.csv`
+- Example: `energy_consumption_northeast_2024_01.csv`
+
+### Model Files
+- Format: `{model_type}_{timestamp}.joblib`
+- Example: `ensemble_2024_01_15_14_30.joblib`
+
+### Notebook Files
+- Number sequentially: `01_*, `02_*, etc.
+- Descriptive names: `01_exploratory_analysis.ipynb`
+
+## Directory Size Guidelines
+
+For optimal performance:
+
+| Directory | Recommended Max Size |
+|-----------|---------------------|
+| `data/raw/` | 10GB |
+| `data/processed/` | 5GB |
+| `models/trained_models/` | 2GB |
+| `results/` | 1GB |
+| `notebooks/` | 500MB |
+
+## Setup Instructions
+
+1. **Create directories** (first time only):
+   ```bash
+   mkdir -p data/{raw,processed} models/trained_models results/{plots,reports,predictions}
+   mkdir -p logs notebooks tests examples deployment docs
+   ```
+
+2. **Clone repository structure**:
+   ```bash
+   git clone <repository-url>
+   cd ai-energy-predictor
+   ```
+
+3. **Initialize environment**:
+   ```bash
+   python -m venv venv
+   source venv/bin/activate  # On Windows: venv\Scripts\activate
+   pip install -r requirements.txt
+   ```
+
+4. **Add data**:
+   ```bash
+   # Copy your data files to data/raw/
+   cp your_data.csv data/raw/
+   ```
+
+## Version Control (.gitignore)
+
+The `.gitignore` file excludes:
+- `__pycache__/` - Python bytecode
+- `.venv/`, `venv/` - Virtual environments
+- `*.pyc` - Compiled Python files
+- `data/raw/` - Raw data files (add to .gitignore if too large)
+- `models/trained_models/*.h5` - Large model files
+- `.env` - Environment credentials
+- `logs/` - Log files
+- `*.egg-info/` - Package metadata
+
+Consider using [Git LFS](https://git-lfs.github.com/) for large data/model files.
+
+## Performance Tips
+
+1. **Keep raw data organized**: One subdirectory per data source
+2. **Archive old results**: Move old predictions to archive directory
+3. **Clean logs regularly**: Archive and compress old log files
+4. **Use symbolic links** for large datasets:
+   ```bash
+   ln -s /mnt/external_drive/data data/external
+   ```
+
+## Continuous Integration
+
+Suggested CI/CD structure:
+```
+.github/workflows/
+├── tests.yml          # Run tests on push
+├── deploy.yml         # Deploy to production
+└── monitoring.yml     # Monitor model performance
+```
+
+## Additional Resources
+
+- See `README.md` for project overview
+- See `CONTRIBUTING.md` for contribution guidelines
+- See `docs/` directory for detailed documentation
+- See `examples/` for usage examples
 
