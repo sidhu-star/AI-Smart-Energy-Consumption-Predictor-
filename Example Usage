@@ -1,0 +1,266 @@
+"""
+Example Usage of AI Smart Energy Consumption Predictor
+Shows how to load data, train models, and make predictions
+"""
+
+import pandas as pd
+import numpy as np
+from predictor import EnergyPredictor
+from data_processor import DataProcessor, create_sample_data
+
+
+def example_1_basic_training():
+    """Example 1: Basic model training and prediction"""
+    print("=" * 60)
+    print("EXAMPLE 1: Basic Training and Prediction")
+    print("=" * 60)
+    
+    # Create sample data
+    print("\n1. Creating sample data...")
+    data = create_sample_data(n_samples=8760)  # 1 year of hourly data
+    
+    # Initialize processor
+    processor = DataProcessor()
+    
+    # Preprocess data
+    print("\n2. Preprocessing data...")
+    processed_data = processor.preprocess(
+        filepath=None,
+        remove_outliers=True,
+        engineer_features=True
+    )
+    # For this example, we'll use the sample data directly
+    processed_data = data.copy()
+    
+    # Get statistics
+    print("\n3. Data Statistics:")
+    stats = processor.get_statistics(processed_data)
+    for key, value in stats.items():
+        print(f"   {key}: {value:.2f}")
+    
+    # Initialize and train predictor
+    print("\n4. Training model...")
+    predictor = EnergyPredictor(model_type='xgboost')
+    predictor.train(
+        data=processed_data,
+        target_column='consumption_kwh',
+        test_size=0.2,
+        epochs=50
+    )
+    
+    print("\nExample 1 completed successfully!")
+
+
+def example_2_ensemble_model():
+    """Example 2: Ensemble model training"""
+    print("\n" + "=" * 60)
+    print("EXAMPLE 2: Ensemble Model Training")
+    print("=" * 60)
+    
+    # Create sample data
+    print("\n1. Creating sample data...")
+    data = create_sample_data(n_samples=8760)
+    
+    # Initialize ensemble predictor
+    print("\n2. Training ensemble model...")
+    predictor = EnergyPredictor(model_type='ensemble')
+    
+    predictor.train(
+        data=data,
+        target_column='consumption_kwh',
+        test_size=0.2,
+        epochs=30,
+        verbose=0
+    )
+    
+    print("Ensemble model training completed!")
+    
+    # Make predictions
+    print("\n3. Making predictions...")
+    X_sample = data.drop(columns=['timestamp', 'consumption_kwh']).values[:50]
+    predictions = predictor.predict(X_sample)
+    
+    print(f"   Predictions shape: {predictions['predictions']['ensemble'].shape}")
+    print(f"   Sample predictions (first 5): {predictions['predictions']['ensemble'][:5]}")
+    
+    print("\nExample 2 completed successfully!")
+
+
+def example_3_anomaly_detection():
+    """Example 3: Anomaly detection"""
+    print("\n" + "=" * 60)
+    print("EXAMPLE 3: Anomaly Detection")
+    print("=" * 60)
+    
+    # Create sample data with anomalies
+    print("\n1. Creating data with anomalies...")
+    data = create_sample_data(n_samples=8760)
+    
+    # Inject some anomalies
+    data.loc[500:505, 'consumption_kwh'] = 5000  # Spike
+    data.loc[1000, 'consumption_kwh'] = 100  # Dip
+    
+    # Train predictor
+    print("\n2. Training model...")
+    predictor = EnergyPredictor(model_type='ensemble')
+    predictor.train(data=data, test_size=0.2, epochs=20, verbose=0)
+    
+    # Detect anomalies
+    print("\n3. Detecting anomalies...")
+    y_data = data['consumption_kwh'].values
+    anomalies = predictor.detect_anomalies(y_data)
+    
+    print(f"   Total anomalies detected: {anomalies.sum()}")
+    print(f"   Anomaly indices: {np.where(anomalies)[0][:10]}")
+    
+    print("\nExample 3 completed successfully!")
+
+
+def example_4_model_evaluation():
+    """Example 4: Model evaluation and metrics"""
+    print("\n" + "=" * 60)
+    print("EXAMPLE 4: Model Evaluation")
+    print("=" * 60)
+    
+    # Create data
+    print("\n1. Creating and preparing data...")
+    data = create_sample_data(n_samples=5000)
+    
+    # Train model
+    print("\n2. Training model...")
+    predictor = EnergyPredictor(model_type='xgboost')
+    
+    X_train, X_test, y_train, y_test, _ = predictor.prepare_data(
+        data,
+        target_column='consumption_kwh',
+        test_size=0.2
+    )
+    
+    predictor.train(data=data, test_size=0.2, epochs=30, verbose=0)
+    
+    # Evaluate
+    print("\n3. Evaluating model...")
+    metrics = predictor.evaluate(X_test, y_test)
+    
+    print("\n   Model Performance Metrics:")
+    print(f"   MAE:  {metrics['mae']:.2f} kWh")
+    print(f"   RMSE: {metrics['rmse']:.2f} kWh")
+    print(f"   MAPE: {metrics['mape']:.2f}%")
+    print(f"   R²:   {metrics['r2']:.4f}")
+    
+    print("\nExample 4 completed successfully!")
+
+
+def example_5_feature_engineering():
+    """Example 5: Advanced feature engineering"""
+    print("\n" + "=" * 60)
+    print("EXAMPLE 5: Feature Engineering")
+    print("=" * 60)
+    
+    # Create data
+    print("\n1. Creating sample data...")
+    data = create_sample_data(n_samples=1000)
+    
+    # Initialize processor
+    processor = DataProcessor()
+    
+    # Engineer features
+    print("\n2. Creating engineered features...")
+    engineered_data = processor.engineer_features(data)
+    
+    print("\n   Original columns:", len(data.columns))
+    print("   After feature engineering:", len(engineered_data.columns))
+    print("\n   New features created:")
+    new_cols = set(engineered_data.columns) - set(data.columns)
+    for col in sorted(list(new_cols))[:10]:  # Show first 10
+        print(f"      - {col}")
+    
+    if len(new_cols) > 10:
+        print(f"      ... and {len(new_cols) - 10} more")
+    
+    print("\nExample 5 completed successfully!")
+
+
+def example_6_batch_prediction():
+    """Example 6: Batch predictions for multiple days"""
+    print("\n" + "=" * 60)
+    print("EXAMPLE 6: Batch Prediction")
+    print("=" * 60)
+    
+    # Create data
+    print("\n1. Creating sample data...")
+    data = create_sample_data(n_samples=8760)
+    
+    # Train model
+    print("\n2. Training model...")
+    predictor = EnergyPredictor(model_type='ensemble')
+    predictor.train(data=data, test_size=0.2, epochs=20, verbose=0)
+    
+    # Make batch predictions
+    print("\n3. Making batch predictions...")
+    predictions_24h = predictor.predict(hours_ahead=24)
+    predictions_48h = predictor.predict(hours_ahead=48)
+    predictions_7d = predictor.predict(hours_ahead=168)  # 7 days
+    
+    print(f"\n   24-hour forecast:")
+    print(f"      Prediction shape: {predictions_24h['predictions'].get('ensemble', 'N/A')}")
+    print(f"   48-hour forecast:")
+    print(f"      Prediction shape: {predictions_48h['predictions'].get('ensemble', 'N/A')}")
+    print(f"   7-day forecast:")
+    print(f"      Prediction shape: {predictions_7d['predictions'].get('ensemble', 'N/A')}")
+    
+    print("\nExample 6 completed successfully!")
+
+
+def main():
+    """Run all examples"""
+    print("\n")
+    print("╔" + "=" * 58 + "╗")
+    print("║" + " " * 10 + "AI Smart Energy Consumption Predictor" + " " * 11 + "║")
+    print("║" + " " * 22 + "Examples & Quickstart" + " " * 16 + "║")
+    print("╚" + "=" * 58 + "╝")
+    
+    try:
+        example_1_basic_training()
+    except Exception as e:
+        print(f"Example 1 error: {e}")
+    
+    try:
+        example_2_ensemble_model()
+    except Exception as e:
+        print(f"Example 2 error: {e}")
+    
+    try:
+        example_3_anomaly_detection()
+    except Exception as e:
+        print(f"Example 3 error: {e}")
+    
+    try:
+        example_4_model_evaluation()
+    except Exception as e:
+        print(f"Example 4 error: {e}")
+    
+    try:
+        example_5_feature_engineering()
+    except Exception as e:
+        print(f"Example 5 error: {e}")
+    
+    try:
+        example_6_batch_prediction()
+    except Exception as e:
+        print(f"Example 6 error: {e}")
+    
+    print("\n" + "=" * 60)
+    print("All examples completed!")
+    print("=" * 60)
+    print("\nNext steps:")
+    print("1. Replace sample data with your actual energy data")
+    print("2. Adjust configuration in config.py for your use case")
+    print("3. Train and evaluate models on your data")
+    print("4. Deploy using the Flask API (see app.py)")
+    print("\nFor more info, see README.md")
+    print()
+
+
+if __name__ == '__main__':
+    main()
