@@ -1,0 +1,366 @@
+"""
+Utility functions for AI Smart Energy Consumption Predictor
+Includes helpers for visualization, metrics, and data handling
+"""
+
+import numpy as np
+import pandas as pd
+from datetime import datetime, timedelta
+import warnings
+warnings.filterwarnings('ignore')
+
+
+class MetricsCalculator:
+    """Calculate various performance metrics for predictions"""
+    
+    @staticmethod
+    def mae(y_true, y_pred):
+        """Mean Absolute Error"""
+        return np.mean(np.abs(y_true - y_pred))
+    
+    @staticmethod
+    def mse(y_true, y_pred):
+        """Mean Squared Error"""
+        return np.mean((y_true - y_pred) ** 2)
+    
+    @staticmethod
+    def rmse(y_true, y_pred):
+        """Root Mean Squared Error"""
+        return np.sqrt(MetricsCalculator.mse(y_true, y_pred))
+    
+    @staticmethod
+    def mape(y_true, y_pred):
+        """Mean Absolute Percentage Error"""
+        return np.mean(np.abs((y_true - y_pred) / y_true)) * 100
+    
+    @staticmethod
+    def smape(y_true, y_pred):
+        """Symmetric Mean Absolute Percentage Error"""
+        numerator = np.abs(y_true - y_pred)
+        denominator = (np.abs(y_true) + np.abs(y_pred)) / 2
+        return np.mean(numerator / denominator) * 100
+    
+    @staticmethod
+    def r2_score(y_true, y_pred):
+        """R-squared (Coefficient of Determination)"""
+        ss_res = np.sum((y_true - y_pred) ** 2)
+        ss_tot = np.sum((y_true - np.mean(y_true)) ** 2)
+        return 1 - (ss_res / ss_tot)
+    
+    @staticmethod
+    def directional_accuracy(y_true, y_pred):
+        """Directional Accuracy - proportion of correct direction predictions"""
+        true_direction = np.diff(y_true) > 0
+        pred_direction = np.diff(y_pred) > 0
+        return np.mean(true_direction == pred_direction) * 100
+    
+    @staticmethod
+    def calculate_all(y_true, y_pred):
+        """Calculate all metrics"""
+        return {
+            'mae': MetricsCalculator.mae(y_true, y_pred),
+            'mse': MetricsCalculator.mse(y_true, y_pred),
+            'rmse': MetricsCalculator.rmse(y_true, y_pred),
+            'mape': MetricsCalculator.mape(y_true, y_pred),
+            'smape': MetricsCalculator.smape(y_true, y_pred),
+            'r2': MetricsCalculator.r2_score(y_true, y_pred),
+            'directional_accuracy': MetricsCalculator.directional_accuracy(y_true, y_pred),
+        }
+
+
+class DataValidator:
+    """Validate and check data quality"""
+    
+    @staticmethod
+    def check_data_quality(data, verbose=True):
+        """Comprehensive data quality check"""
+        report = {
+            'valid': True,
+            'issues': [],
+            'warnings': [],
+            'stats': {}
+        }
+        
+        # Basic info
+        report['stats']['total_rows'] = len(data)
+        report['stats']['total_columns'] = len(data.columns)
+        
+        # Missing values
+        missing_pct = (data.isnull().sum() / len(data) * 100)
+        report['stats']['missing_values'] = missing_pct.to_dict()
+        
+        if missing_pct.max() > 0:
+            high_missing = missing_pct[missing_pct > 10]
+            if not high_missing.empty:
+                report['warnings'].append(
+                    f"High missing values in: {high_missing.to_dict()}"
+                )
+        
+        # Duplicates
+        duplicates = data.duplicated().sum()
+        report['stats']['duplicate_rows'] = duplicates
+        
+        if duplicates > 0:
+            report['warnings'].append(f"Found {duplicates} duplicate rows")
+        
+        # Data types
+        report['stats']['data_types'] = data.dtypes.astype(str).to_dict()
+        
+        # Numeric columns analysis
+        numeric_cols = data.select_dtypes(include=[np.number]).columns
+        for col in numeric_cols:
+            col_data = data[col]
+            report['stats'][f'{col}_stats'] = {
+                'mean': col_data.mean(),
+                'std': col_data.std(),
+                'min': col_data.min(),
+                'max': col_data.max(),
+                'skewness': col_data.skew(),
+                'kurtosis': col_data.kurtosis()
+            }
+        
+        if verbose:
+            print("\n" + "=" * 60)
+            print("DATA QUALITY REPORT")
+            print("=" * 60)
+            print(f"Total Rows: {report['stats']['total_rows']}")
+            print(f"Total Columns: {report['stats']['total_columns']}")
+            print(f"Duplicate Rows: {report['stats']['duplicate_rows']}")
+            
+            if missing_pct.max() > 0:
+                print("\nMissing Values:")
+                for col, pct in missing_pct[missing_pct > 0].items():
+                    print(f"  {col}: {pct:.2f}%")
+            
+            if report['warnings']:
+                print("\nWarnings:")
+                for warning in report['warnings']:
+                    print(f"  ⚠ {warning}")
+            
+            print("=" * 60)
+        
+        return report
+
+
+class TimeSeriesHelper:
+    """Helper functions for time series operations"""
+    
+    @staticmethod
+    def create_datetime_features(dates):
+        """Create multiple datetime features from dates"""
+        features = pd.DataFrame({
+            'date': pd.to_datetime(dates),
+        })
+        
+        features['hour'] = features['date'].dt.hour
+        features['day'] = features['date'].dt.day
+        features['month'] = features['date'].dt.month
+        features['dayofweek'] = features['date'].dt.dayofweek
+        features['week'] = features['date'].dt.isocalendar().week
+        features['dayofyear'] = features['date'].dt.dayofyear
+        features['quarter'] = features['date'].dt.quarter
+        
+        # Cyclical encoding
+        features['hour_sin'] = np.sin(2 * np.pi * features['hour'] / 24)
+        features['hour_cos'] = np.cos(2 * np.pi * features['hour'] / 24)
+        features['month_sin'] = np.sin(2 * np.pi * features['month'] / 12)
+        features['month_cos'] = np.cos(2 * np.pi * features['month'] / 12)
+        
+        return features.drop('date', axis=1)
+    
+    @staticmethod
+    def resample_timeseries(data, freq='1H', method='mean'):
+        """Resample time series to different frequency"""
+        if 'timestamp' not in data.columns:
+            raise ValueError("DataFrame must contain 'timestamp' column")
+        
+        data = data.set_index('timestamp')
+        if method == 'mean':
+            resampled = data.resample(freq).mean()
+        elif method == 'sum':
+            resampled = data.resample(freq).sum()
+        elif method == 'max':
+            resampled = data.resample(freq).max()
+        elif method == 'min':
+            resampled = data.resample(freq).min()
+        else:
+            raise ValueError(f"Unknown method: {method}")
+        
+        return resampled.reset_index()
+    
+    @staticmethod
+    def split_train_test_temporal(data, test_size=0.2, date_column='timestamp'):
+        """
+        Temporal train/test split (respects time order)
+        """
+        if date_column in data.columns:
+            data = data.sort_values(date_column)
+        
+        split_idx = int(len(data) * (1 - test_size))
+        train = data.iloc[:split_idx]
+        test = data.iloc[split_idx:]
+        
+        return train, test
+
+
+class ConfidenceIntervalCalculator:
+    """Calculate confidence intervals for predictions"""
+    
+    @staticmethod
+    def calculate_ci(predictions, residuals, confidence=0.95):
+        """
+        Calculate confidence intervals based on residuals
+        """
+        from scipy import stats
+        
+        std_error = np.std(residuals)
+        z_score = stats.norm.ppf((1 + confidence) / 2)
+        
+        margin_of_error = z_score * std_error
+        
+        lower_bound = predictions - margin_of_error
+        upper_bound = predictions + margin_of_error
+        
+        return lower_bound, upper_bound
+    
+    @staticmethod
+    def calculate_ensemble_ci(ensemble_predictions, confidence=0.95):
+        """
+        Calculate confidence intervals from ensemble predictions
+        """
+        predictions = np.array(ensemble_predictions)
+        
+        mean_pred = np.mean(predictions, axis=0)
+        std_pred = np.std(predictions, axis=0)
+        
+        from scipy import stats
+        z_score = stats.norm.ppf((1 + confidence) / 2)
+        
+        margin = z_score * std_pred
+        
+        return mean_pred - margin, mean_pred + margin
+
+
+class PerformanceMonitor:
+    """Monitor and log model performance over time"""
+    
+    def __init__(self):
+        self.history = []
+    
+    def record(self, metrics, timestamp=None):
+        """Record performance metrics"""
+        if timestamp is None:
+            timestamp = datetime.now()
+        
+        record = {
+            'timestamp': timestamp,
+            **metrics
+        }
+        self.history.append(record)
+    
+    def get_history(self, metric_name=None):
+        """Get performance history"""
+        if not self.history:
+            return pd.DataFrame()
+        
+        df = pd.DataFrame(self.history)
+        
+        if metric_name:
+            return df[['timestamp', metric_name]]
+        
+        return df
+    
+    def summary(self):
+        """Get summary statistics"""
+        if not self.history:
+            return {}
+        
+        df = pd.DataFrame(self.history)
+        
+        numeric_cols = df.select_dtypes(include=[np.number]).columns
+        
+        summary = {}
+        for col in numeric_cols:
+            summary[col] = {
+                'mean': df[col].mean(),
+                'std': df[col].std(),
+                'min': df[col].min(),
+                'max': df[col].max(),
+            }
+        
+        return summary
+
+
+class OutputFormatter:
+    """Format model outputs for different purposes"""
+    
+    @staticmethod
+    def format_predictions(predictions, timestamps=None, include_metadata=True):
+        """Format predictions as DataFrame"""
+        if timestamps is None:
+            timestamps = pd.date_range(start=datetime.now(), periods=len(predictions), freq='H')
+        
+        df = pd.DataFrame({
+            'timestamp': timestamps,
+            'prediction': predictions
+        })
+        
+        if include_metadata:
+            df['created_at'] = datetime.now()
+            df['model_version'] = '1.0.0'
+        
+        return df
+    
+    @staticmethod
+    def format_for_api(data):
+        """Format data for API response"""
+        if isinstance(data, np.ndarray):
+            return data.tolist()
+        elif isinstance(data, pd.DataFrame):
+            return data.to_dict(orient='records')
+        elif isinstance(data, pd.Series):
+            return data.to_dict()
+        return data
+    
+    @staticmethod
+    def format_report(predictions, actuals=None, metrics=None):
+        """Format comprehensive prediction report"""
+        report = {
+            'predictions': OutputFormatter.format_for_api(predictions),
+            'timestamp': datetime.now().isoformat(),
+        }
+        
+        if actuals is not None:
+            report['actuals'] = OutputFormatter.format_for_api(actuals)
+        
+        if metrics is not None:
+            report['metrics'] = metrics
+        
+        return report
+
+
+# Convenience functions
+def calculate_metrics(y_true, y_pred):
+    """Quick metrics calculation"""
+    return MetricsCalculator.calculate_all(y_true, y_pred)
+
+
+def validate_data(data, verbose=True):
+    """Quick data validation"""
+    return DataValidator.check_data_quality(data, verbose=verbose)
+
+
+def format_output(data):
+    """Quick output formatting"""
+    return OutputFormatter.format_for_api(data)
+
+
+if __name__ == '__main__':
+    print("Utility functions module for Energy Predictor")
+    print("\nAvailable classes:")
+    print("  - MetricsCalculator: Performance metrics")
+    print("  - DataValidator: Data quality checks")
+    print("  - TimeSeriesHelper: Time series operations")
+    print("  - ConfidenceIntervalCalculator: CI calculations")
+    print("  - PerformanceMonitor: Track performance over time")
+    print("  - OutputFormatter: Format outputs")
